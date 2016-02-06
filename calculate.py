@@ -357,9 +357,12 @@ def calculate_betrayal(vm, only_necessary = False, only_current = False, limit =
     print_cnt = 0
     for k, v in betrayal_ctr.most_common():
         if k in sl.senators:
+            senator = sl.senators[k]
+            if only_current and not senator.current:
+                continue
             print_cnt += 1
             success_pct = float(v)/(v + futility_ctr[k])
-            print '{:>7} {:>12.2f} {}'.format(v, success_pct, sl.get_senator_info(k))
+            print '{:>7} {:>12.2f} {}'.format(v, success_pct, str(senator))
         if limit > 0 and print_cnt >= limit:
             break
 
