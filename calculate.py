@@ -1,9 +1,17 @@
 #!/usr/bin/env python
 from argparse import ArgumentParser
 from collections import Counter, defaultdict
+import distutils.spawn
 import json
 import os
+try:
+   import cPickle as pickle
+except:
+   import pickle
+import subprocess
+import sys
 
+# requires pyaml
 import yaml
 
 """ Words used in the 'result' section of a vote to indicate that the ayes won. """
@@ -61,26 +69,75 @@ FAIL_WORDS = (
     'Veto Sustained',
 )
 
+def load_senators(do_rsync):
+    """ Builds new pickled senator data
+
+    First, it rsyncs the legislator data from govtrack.us to data/legislators
+    Second, it builds senators
+    Third, it pickles them all in data/legislators/senators.pickle
+    """
+    if not os.path.isdir('data/legislators'):
+        os.makedirs('data/legislators')
+    if do_rsync and test_for_rsync():
+        with open('/dev/null', 'wb') as f:
+            if subprocess.call(['rsync', '-avz', '--delete', '--delete-excluded', '--exclude', '**/text-versions/', '--exclude', '*.xml', 'govtrack.us::govtrackdata/congress-legislators/legislators-current.yaml', 'data/legislators/legislators-current.yaml'], stdout=f, stderr=f):
+                print """Rsync not working. Please download these two files and place them in data/legislators:
+                         https://www.govtrack.us/data/congress-legislators/legislators-current.yaml
+                         https://www.govtrack.us/data/congress-legislators/legislators-historical.yaml"""
+            elif subprocess.call(['rsync', '-avz', '--delete', '--delete-excluded', '--exclude', '**/text-versions/', '--exclude', '*.xml', 'govtrack.us::govtrackdata/congress-legislators/legislators-historical.yaml', 'data/legislators/legislators-historical.yaml'], stdout=f, stderr=f):
+                print """Rsync not working for historical legislators. Please download this file and place it in data/legislators:
+                         https://www.govtrack.us/data/congress-legislators/legislators-historical.yaml"""
+    elif do_rsync:
+        print """No rsync, please download these two files and place them in data/legislators:
+                 https://www.govtrack.us/data/congress-legislators/legislators-current.yaml
+                 https://www.govtrack.us/data/congress-legislators/legislators-historical.yaml"""
+    success = True
+    senators = {}
+    if os.path.exists('data/legislators/legislators-current.yaml'):
+        with open('data/legislators/legislators-current.yaml', 'rb') as f:
+            senator_list = yaml.load(f)
+            for data in senator_list:
+                try:
+                    s = Senator(data, True)
+                    senators[s.lis] = s
+                except KeyError:
+                    pass
+    else:
+        print 'No file at data/legislators/legislators-current.yaml. Please download from https://www.govtrack.us/data/congress-legislators/legislators-current.yaml'
+        success = False
+
+    if os.path.exists('data/legislators/legislators-historical.yaml'):
+        with open('data/legislators/legislators-historical.yaml', 'rb') as f:
+            senator_list = yaml.load(f)
+            for data in senator_list:
+                try:
+                    s = Senator(data, False)
+                    if s.lis in senators:
+                        print "Data integrity issue: {} ({}) is in both current and historical records. Please update both legislators files".format(s.name, s.lis)
+                        sys.exit(1)
+                    senators[s.lis] = s
+                except KeyError:
+                    pass
+    else:
+        print 'No file at data/legislators/legislators-historical.yaml. Please download from https://www.govtrack.us/data/congress-legislators/legislators-historical.yaml'
+        success = False
+
+    if not success:
+        sys.exit(1)
+
+    with open('data/legislators/legislators.pickle', 'wb') as f:
+        pickle.dump(senators, f)
+def test_for_rsync():
+    return bool(distutils.spawn.find_executable('rsync'))
+    
 class SenatorLookup(object):
     """ Class for loading senator information from a yaml file
     for later lookup. """
     def __init__(self):
-        self.senators = {}
-        self._add_senators('legislators-current.yaml')
-
-    def add_historical(self):
-        self._add_senators('legislators-historical.yaml')
-
-    def _add_senators(self, senator_yml):
-        with open(senator_yml, 'rb') as f:
-            senator_list = yaml.load(f)
-            for data in senator_list:
-                try:
-                    s = Senator(data)
-                    self.senators[s.lis] = s
-                except KeyError:
-                    pass
-
+        if not os.path.exists('data/legislators/legislators.pickle'):
+            load_senators(False)
+        with open('data/legislators/legislators.pickle', 'rb') as f:
+            self.senators = pickle.load(f)
     def get_senator_info(self, lis):
         if lis in self.senators:
             return str(self.senators[lis])
@@ -89,11 +146,12 @@ class SenatorLookup(object):
 
 class Senator(object):
     """ Utility class for holding information about a given Senator. """
-    def __init__(self, data):
+    def __init__(self, data, current):
         self.lis = data['id']['lis']
         self.name = self._name_from_data(data)
         self.parties = self._parties_from_data(data)
         self.states = self._states_from_data(data)
+        self.current = current
 
     def _name_from_data(self, data):
         name_data = data['name']
@@ -295,8 +353,6 @@ def calculate_betrayal(vm, only_necessary = False, only_current = False, limit =
     print 'Number of votes opposed to own party that subverted party desire, by senator'
     print 'Betray  Success Pct  Senator'
     sl = SenatorLookup()
-    if not only_current:
-        sl.add_historical()
 
     print_cnt = 0
     for k, v in betrayal_ctr.most_common():
@@ -392,20 +448,25 @@ def conscience(vm):
 
 
 def run(args):
-    vm = VoteManager()
-    for dirname in args.dirs.split(','):
-        for root, dirs, files in os.walk(dirname):
-            for f in files:
-                if f.endswith('json'):
-                    file_path = '{}/{}'.format(root, f)
-                    with open(file_path, 'rb') as jfile:
-                        vm.votes.append(Vote(json.load(jfile)))
+    if args.action == 'load-senators':
+        # load_senators(False)
+        sl = SenatorLookup()
+    else:
+        vm = VoteManager()
+        for dirname in args.dirs.split(','):
+            for root, dirs, files in os.walk(dirname):
+                for f in files:
+                    if f.endswith('json'):
+                        file_path = '{}/{}'.format(root, f)
+                        with open(file_path, 'rb') as jfile:
+                            vm.votes.append(Vote(json.load(jfile)))
 
-    calculate_betrayal(vm, args.only_necessary, args.only_current, args.limit)
+        calculate_betrayal(vm, args.only_necessary, args.only_current, args.limit)
 
 if __name__ == '__main__':
     parser = ArgumentParser(description='Write out data about senator\'s betrayals')
     parser.add_argument('dirs', type=str, help='csv of years to parse')
+    parser.add_argument('--action', type=str, default='calculate', help='Action to take: calculate, load-senators, load-year')
     parser.add_argument('--only-current', action='store_true', help='limit to current senators')
     parser.add_argument('--only-necessary', action='store_true', help='limit betrayals to necessary ones')
     parser.add_argument('--limit', type=int, default=20, help='Number of senators to give data for')
