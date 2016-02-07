@@ -448,27 +448,61 @@ def conscience(vm):
         for k, v in vote.party_breakdown.items():
             pass
 
+def calculate_session(year):
+    if int(year) < 1941:
+        print 'Unable to calculate session for years before 1941'
+        sys.exit(1)
+    # Sessions start in 1789 and go last two years
+    return (int(year) + 1)/2 - 894
 
+def load_year(year):
+    session = calculate_session(year)
+    if test_for_rsync():
+        if not os.path.isdir('data'):
+            os.makedirs('data')
+        with open('/dev/null', 'wb') as f:
+            if subprocess.call(['rsync', '-avz', '--delete', '--delete-excluded', '--exclude', '**/text-versions/', '--exclude', '*.xml', 'govtrack.us::govtrackdata/congress/{}/votes/{}/s*'.format(session, year), 'data/{}'.format(year)], stdout=f, stderr=f):
+                print "Rsync not working for {year}. Please download all json in subdirectories of https://www.govtrack.us/data/congress/{sessions}/votes/{year}/s*".format(year=year, session=session)
+    else:
+        print "Rsync not working for {year}. Please download all json in subdirectories of https://www.govtrack.us/data/congress/{sessions}/votes/{year}/s*".format(year=year, session=session)
+
+    votes = []
+    for root, dirs, files in os.walk("data/{}".format(year)):
+        for filename in files:
+            if filename.endswith('json'):
+                file_path = '{}/{}'.format(root, filename)
+                with open(file_path, 'rb') as f:
+                    votes.append(Vote(json.load(f)))
+
+    if votes:
+        with open("data/{}/votes.pickle".format(year), 'wb') as f:
+            pickle.dump(votes, f)
+        return votes
+    else:
+        print "Something wrong: no votes for {}".format(year)
+        sys.exit(1)
 
 def run(args):
     if args.action == 'load-senators':
-        # load_senators(False)
-        sl = SenatorLookup()
+        load_senators(True)
+    elif args.action == 'load-years':
+        for year in args.years.split(','):
+            print 'Loading:', year
+            load_year(year)
     else:
         vm = VoteManager()
-        for dirname in args.dirs.split(','):
-            for root, dirs, files in os.walk(dirname):
-                for f in files:
-                    if f.endswith('json'):
-                        file_path = '{}/{}'.format(root, f)
-                        with open(file_path, 'rb') as jfile:
-                            vm.votes.append(Vote(json.load(jfile)))
-
+        for year in args.years.split(','):
+            if os.path.exists("data/{}/votes.pickle".format(year)):
+                with open("data/{}/votes.pickle".format(year), 'rb') as f:
+                    votes = pickle.load(f)
+            else:
+                votes = load_year(year)
+            vm.votes.extend(votes)
         calculate_betrayal(vm, args.only_necessary, args.only_current, args.limit)
 
 if __name__ == '__main__':
     parser = ArgumentParser(description='Write out data about senator\'s betrayals')
-    parser.add_argument('dirs', type=str, help='csv of years to parse')
+    parser.add_argument('years', type=str, help='csv of years to parse')
     parser.add_argument('--action', type=str, default='calculate', help='Action to take: calculate, load-senators, load-year')
     parser.add_argument('--only-current', action='store_true', help='limit to current senators')
     parser.add_argument('--only-necessary', action='store_true', help='limit betrayals to necessary ones')
