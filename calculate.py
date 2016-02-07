@@ -208,7 +208,7 @@ class Senator(object):
         return states
 
     def __str__(self):
-        return '{} {} - {}'.format(self.name, ','.join(self.parties), ','.join(self.states))
+        return '{} ({} - {})'.format(self.name, ','.join(self.parties), ','.join(self.states))
 
 class UnknownResultError(ValueError):
     pass
@@ -395,14 +395,15 @@ def calculate_betrayal(vm, only_necessary = False, only_current = False, only_ca
     sl = SenatorLookup()
     senators = set()
     for roll_call in vm.roll_calls:
-        add_betrayal = not only_necessary or roll_call.betrayal_necessary
+        if only_necessary and not roll_call.betrayal_necessary:
+            continue
         for vote in roll_call.votes:
             senator = sl.senators[vote.senator_id]
             senators.add(senator)
             senator.vote_cnt += 1
-            if vote.betrayed_party and add_betrayal:
+            if vote.betrayed_party:
                 senator.betrayal_cnt += 1
-            if vote.futile_betrayal and add_betrayal:
+            if vote.futile_betrayal:
                 senator.futile_cnt += 1
     if only_necessary:
         print 'Only considering occasions in which neither party had enough votes to win'
@@ -418,11 +419,11 @@ def calculate_betrayal(vm, only_necessary = False, only_current = False, only_ca
             continue
         if only_current and not senator.current:
             continue
-        print_cnt += 1
         all_votes = senator.vote_cnt
         total = senator.total_betrayal_cnt
         betrayal_count = senator.betrayal_cnt
         success_pct = senator.success_pct
+        print_cnt += 1
         print '{:>6} {:>6} {:>9} {:>12.2f}     {}'.format(all_votes, total, betrayal_count, success_pct, str(senator))
         if limit > 0 and print_cnt >= limit:
             break
