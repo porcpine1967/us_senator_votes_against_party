@@ -377,7 +377,14 @@ class Vote(object):
         self.betrayed_party = None
         self.futile_betrayal = None
 
-def calculate_betrayal(vm, only_necessary = False, only_current = False, only_candidates = False, limit = 20):
+SORT_KEYS = {
+    'all': lambda x: x.vote_cnt,
+    'total': lambda x: x.total_betrayal_cnt,
+    'success': lambda x: x.betrayal_cnt,
+    'fail': lambda x: x.futile_cnt,
+    'pct': lambda x: x.success_pct,
+}
+def calculate_betrayal(vm, only_necessary = False, only_current = False, only_candidates = False, limit = 20, sort = 'pct'):
     sl = SenatorLookup()
     senators = set()
     for tally in vm.tallies:
@@ -399,7 +406,7 @@ def calculate_betrayal(vm, only_necessary = False, only_current = False, only_ca
 
     print_cnt = 0
 
-    for senator in sorted(senators, reverse=True, key=lambda x: x.success_pct):
+    for senator in sorted(senators, reverse=True, key=SORT_KEYS[sort]):
         if only_candidates and senator.lis not in CANDIDATE_IDS:
             continue
         if only_current and not senator.current:
@@ -499,7 +506,7 @@ def run(args):
             else:
                 tallies = load_year(year)
             vm.tallies.extend(tallies)
-        calculate_betrayal(vm, args.only_necessary, args.only_current, args.only_pc, args.limit)
+        calculate_betrayal(vm, args.only_necessary, args.only_current, args.only_pc, args.limit, args.sort)
 
 if __name__ == '__main__':
     parser = ArgumentParser(description='Write out data about senators\' votes in opposition to the majority of their parties')
@@ -509,5 +516,6 @@ if __name__ == '__main__':
     parser.add_argument('--only-necessary', action='store_true', help='limit betrayals to necessary ones')
     parser.add_argument('--limit', type=int, default=20, help='Number of senators to give data for')
     parser.add_argument('--only-pc', action='store_true', help='only show presidential candidates')
+    parser.add_argument('--sort', type=str, default='pct', help='column to sort by: all, total, success, fail, pct')
     args = parser.parse_args()
     run(args)
