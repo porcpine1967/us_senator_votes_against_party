@@ -14,7 +14,7 @@ import sys
 # requires pyaml
 import yaml
 
-""" Words used in the 'result' section of a vote to indicate that the ayes won. """
+""" Words used in the 'result' section of a tally to indicate that the ayes won. """
 SUCCESS_WORDS = (
     'Amendment Agreed to',
     'Amendment Germane',
@@ -40,7 +40,7 @@ SUCCESS_WORDS = (
     'Resolution of Ratification Agreed to',
     'Veto Overridden',
 )
-""" Words used in the 'result' section of a vote to indicate that the nays won. """
+""" Words used in the 'result' section of a tally to indicate that the nays won. """
 FAIL_WORDS = (
     'Amendment Not Germane',
     'Amendment Rejected',
@@ -131,7 +131,7 @@ def load_senators(do_rsync):
         pickle.dump(senators, f)
 def test_for_rsync():
     return bool(distutils.spawn.find_executable('rsync'))
-    
+
 class SenatorLookup(object):
     """ Class for loading senator information from a yaml file
     for later lookup. """
@@ -183,7 +183,7 @@ class UnknownResultError(ValueError):
     pass
 
 def successful(result):
-    """ Returns string indicating if ayes (Y) or nays (N) won a given vote result. """
+    """ Returns string indicating if ayes (Y) or nays (N) won a given tally. """
     if result in SUCCESS_WORDS:
         return 'Y'
     if result in FAIL_WORDS:
@@ -192,34 +192,32 @@ def successful(result):
         raise UnknownResultError()
     raise ValueError('{} is not a documented result'.format(result))
 
-class VoteManager(object):
-    """ Class for holding an array of votes. """
+class TallyManager(object):
+    """ Class for holding an array of tallies. """
     def __init__(self):
-        self.votes = []
+        self.tallies = []
 
-class Vote(object):
-    """ Class for retaining information about the results a vote in the Senate.
-    Confusingly, it contains an array of 'votes', which are the individual indications
-    of aye or nay by a given Senator.
+class Tally(object):
+    """ Class for retaining information about the results of a call for votes (called "tally") in the Senate.
 
     Attributes:
-    vote_id: the unique identifier of this vote
+    tally_id: the unique identifier of this tally
     requires: the rule for the success of those in favor -- 1/2, 3/5, or 2/3
     votes: array containing all the votes of individual senators
-    resolution: the string indicating the result of the vote
+    resolution: the string indicating the result of the tally
     success: 'Y' or 'N' indicating by the resolution whether the ayes or nays won
     party_breakdown: dictionary of percentages of each party voting aye or nay, for
     example, the keys would be Democrat-N, Democrat-Y, Republican-N, Republican-Y for
-    a vote with senators in each category, and the total would add up to 2 (100% for each
+    a tally with senators in each category, and the total would add up to 2 (100% for each
     party)
 
 
     """
-    def __init__(self, vote_data):
-        self.vote_id = vote_data['vote_id']
-        self.requires = vote_data['requires']
-        self.votes = self._load_votes(vote_data)
-        self.resolution = vote_data['result']
+    def __init__(self, tally_data):
+        self.tally_id = tally_data['vote_id']
+        self.requires = tally_data['requires']
+        self.votes = self._load_votes(tally_data)
+        self.resolution = tally_data['result']
         self.success = successful(self.resolution)
         self.party_breakdown = self._calculate_party_breakdown()
         self._load_betrayed_party()
@@ -229,29 +227,29 @@ class Vote(object):
         on the side of success. """
         return self.party_breakdown['{}-{}'.format(party, self.success)] > .5
 
-    def _load_votes(self, vote_data):
-        """ Builds VoteResponse objects to fill the votes array. Note, this only loads
+    def _load_votes(self, tally_data):
+        """ Builds Vote objects to fill the votes array. Note, this only loads
         ayes and nays -- ignoring 'present' and 'not voting'."""
         return_data = []
-        v = vote_data['votes']
+        votes = tally_data['votes']
         loaded = False
-        if 'Nay' in v:
+        if 'Nay' in votes:
             loaded = True
-            for vr_data in v['Nay']:
-                return_data.append(VoteResponse(vr_data['id'], vr_data['party'], 'N'))
-        if 'Not Guilty' in v:
+            for vote_data in votes['Nay']:
+                return_data.append(Vote(vote_data['id'], vote_data['party'], 'N'))
+        if 'Not Guilty' in votes:
             loaded = True
-            for vr_data in v['Not Guilty']:
-                return_data.append(VoteResponse(vr_data['id'], vr_data['party'], 'N'))
-        if 'Yea' in v:
+            for vote_data in votes['Not Guilty']:
+                return_data.append(Vote(vote_data['id'], vote_data['party'], 'N'))
+        if 'Yea' in votes:
             loaded = True
-            for vr_data in v['Yea']:
-                if "VP" != vr_data:
-                    return_data.append(VoteResponse(vr_data['id'], vr_data['party'], 'Y'))
-        if 'Guilty' in v:
+            for vote_data in votes['Yea']:
+                if "VP" != vote_data:
+                    return_data.append(Vote(vote_data['id'], vote_data['party'], 'Y'))
+        if 'Guilty' in votes:
             loaded = True
-            for vr_data in v['Guilty']:
-                return_data.append(VoteResponse(vr_data['id'], vr_data['party'], 'Y'))
+            for vote_data in votes['Guilty']:
+                return_data.append(Vote(vote_data['id'], vote_data['party'], 'Y'))
         if not loaded:
             raise ValueError('Nothing to count')
         return return_data
@@ -259,9 +257,9 @@ class Vote(object):
     def _calculate_party_breakdown(self):
         breakdown_count = Counter()
         parties = set()
-        for vr in self.votes:
-            breakdown_count['{}-{}'.format(vr.party, vr.vote_answer)] += 1
-            parties.add(vr.party)
+        for vote in self.votes:
+            breakdown_count['{}-{}'.format(vote.party, vote.vote_answer)] += 1
+            parties.add(vote.party)
         breakdown = {}
         for party in parties:
             party_yes = breakdown_count['{}-Y'.format(party)]
@@ -273,33 +271,33 @@ class Vote(object):
 
     def _load_betrayed_party(self):
         """ Sets the betrayed_party and futile_betrayal attributes of all
-        VoteResponse objects in the votes array. """
-        for vr in self.votes:
-            party_won = self.party_won(vr.party)
-            vr.betrayed_party = self.success == vr.vote_answer and not party_won
-            vr.futile_betrayal = self.success != vr.vote_answer and party_won
+        Vote objects in the votes array. """
+        for vote in self.votes:
+            party_won = self.party_won(vote.party)
+            vote.betrayed_party = self.success == vote.vote_answer and not party_won
+            vote.futile_betrayal = self.success != vote.vote_answer and party_won
 
     @property
     def yea_count(self):
         """ How many yeas. """
-        return len([vr for vr in self.votes if vr.vote_answer == 'Y'])
+        return len([vote for vote in self.votes if vote.vote_answer == 'Y'])
 
     @property
     def nay_count(self):
         """ How many nays. """
-        return len([vr for vr in self.votes if vr.vote_answer == 'N'])
+        return len([vote for vote in self.votes if vote.vote_answer == 'N'])
 
     @property
     def betrayal_cnt(self):
         """ How many votes were against the majority of the voter's party. """
-        return len([vr for vr in self.votes if vr.betrayed_party])
+        return len([vote for vote in self.votes if vote.betrayed_party])
 
     @property
     def betrayal_necessary(self):
-        """ Whether the ultimate resolution of the vote could have been accomplished
+        """ Whether the ultimate resolution of the tally could have been accomplished
         by a single party without the assistance of members of the other. For example,
-        in a 1/2 requires status and the vote was a success, if the ayes of one party
-        on its own were greater than 50% of the vote, then no betrayal would have been
+        in a 1/2 requires status and the tally was a success, if the ayes of one party
+        on its own were greater than 50% of the tally, then no betrayal would have been
         necesssary. However, if the ayes of neither party on its own surpassed the 50%
         mark, then betrayal was necessary. """
         betrayals = self.betrayal_cnt
@@ -316,7 +314,7 @@ class Vote(object):
 
 def necessary_yeas(nays, requires):
     """ Based on the number of nays and the requirement for success,
-    how many yeas would be necessary to carry the vote. Assumes ties
+    how many yeas would be necessary to carry the tally. Assumes ties
     go to the nays for simplicity."""
     if requires == '1/2':
         return nays + 1
@@ -329,7 +327,7 @@ def necessary_yeas(nays, requires):
 
 def necessary_nays(yeas, requires):
     """ Based on the number of ayes and the requirement for success,
-    how many nays would be necessary to defeat the vote. Assumes ties
+    how many nays would be necessary to defeat the tally. Assumes ties
     go to the nays for simplicity. """
     if requires == '1/2':
         return yeas
@@ -340,8 +338,8 @@ def necessary_nays(yeas, requires):
     else:
         raise ValueError('Invalid requires: {}'.format(requires))
 
-class VoteResponse(object):
-    """ Utility class for holding attributes of a given Senator's answer in a vote. """
+class Vote(object):
+    """ Utility class for holding attributes of a given Senator's vote. """
     def __init__(self, senator_id, party, vote_answer):
         self.senator_id = senator_id
         self.party = party
@@ -352,49 +350,49 @@ class VoteResponse(object):
 def calculate_betrayal(vm, only_necessary = False, only_current = False, limit = 20):
     betrayal_ctr = Counter()
     futility_ctr = Counter()
-    for vote in vm.votes:
-        add_betrayal = not only_necessary or vote.betrayal_necessary
-        for vr in vote.votes:
-            if vr.betrayed_party and add_betrayal:
-                betrayal_ctr[vr.senator_id] += 1
-            if vr.futile_betrayal:
-                futility_ctr[vr.senator_id] += 1
+    for tally in vm.tallies:
+        add_betrayal = not only_necessary or tally.betrayal_necessary
+        for vote in tally.votes:
+            if vote.betrayed_party and add_betrayal:
+                betrayal_ctr[vote.senator_id] += 1
+            if vote.futile_betrayal:
+                futility_ctr[vote.senator_id] += 1
     print 'Number of votes opposed to own party that subverted party desire, by senator'
     print 'Betray  Success Pct  Senator'
     sl = SenatorLookup()
 
     print_cnt = 0
-    for k, v in betrayal_ctr.most_common():
-        if k in sl.senators:
-            senator = sl.senators[k]
+    for senator_id, betrayal_count in betrayal_ctr.most_common():
+        if senator_id in sl.senators:
+            senator = sl.senators[senator_id]
             if only_current and not senator.current:
                 continue
             print_cnt += 1
-            success_pct = float(v)/(v + futility_ctr[k])
-            print '{:>7} {:>12.2f} {}'.format(v, success_pct, str(senator))
+            success_pct = float(betrayal_count)/(betrayal_count + futility_ctr[senator_id])
+            print '{:>7} {:>12.2f} {}'.format(betrayal_count, success_pct, str(senator))
         if limit > 0 and print_cnt >= limit:
             break
 
 def resolution_hist(vm):
     """ Exploratory histogram """
     resolution_ctr = Counter()
-    for v in vm.votes:
-        resolution_ctr[v.resolution] += 1
+    for tally in vm.tallies:
+        resolution_ctr[tally.resolution] += 1
     print 'Resolutions count ordered by most common descending'
-    for k, v in resolution_ctr.most_common():
-        print k, v
+    for resolution, resolution_count in resolution_ctr.most_common():
+        print resolution, resolution_count
 
 def betrayal_hist(vm):
     """ Exploratory histogram """
     print 'Hist of number of betraying votes'
     betrayal_ctr = Counter()
-    for vote in vm.votes:
-        betrayals = len([vr for vr in vote.votes if vr.betrayed_party])
+    for tally in vm.tallies:
+        betrayals = len([vote for vote in tally.votes if vote.betrayed_party])
         betrayal_ctr[betrayals] += 1
         if betrayals > 30:
-            print vote.vote_id
-    for k, v in betrayal_ctr.most_common():
-        print k, v
+            print tally.vote_id
+    for betrayal_quantity, betrayal_quantity_occurences in betrayal_ctr.most_common():
+        prin betrayal_quantity, betrayal_quantity_occurences
 
 def calculate_session(year):
     if int(year) < 1941:
@@ -416,24 +414,24 @@ def load_year(year):
     else:
         print "Rsync not working for {year}. Please download all json in subdirectories of https://www.govtrack.us/data/congress/{session}/votes/{year}/s*".format(year=year, session=session)
 
-    votes = []
+    tallies = []
     for root, dirs, files in os.walk("data/{}".format(year)):
         for filename in files:
             if filename.endswith('json'):
                 file_path = '{}/{}'.format(root, filename)
                 with open(file_path, 'rb') as f:
                     try:
-                        votes.append(Vote(json.load(f)))
+                        tallies.append(Tally(json.load(f)))
                     except:
                         print 'Error in {}'.format(file_path)
                         raise
 
-    if votes:
-        with open("data/{}/votes.pickle".format(year), 'wb') as f:
-            pickle.dump(votes, f)
-        return votes
+    if tallies:
+        with open("data/{}/tallies.pickle".format(year), 'wb') as f:
+            pickle.dump(tallies, f)
+        return tallies
     else:
-        print "Something wrong: no votes for {}".format(year)
+        print "Something wrong: no tallies for {}".format(year)
         sys.exit(1)
 
 def run(args):
@@ -444,14 +442,14 @@ def run(args):
             print 'Loading:', year
             load_year(year)
     else:
-        vm = VoteManager()
+        vm = TallyManager()
         for year in args.years.split(','):
-            if os.path.exists("data/{}/votes.pickle".format(year)):
-                with open("data/{}/votes.pickle".format(year), 'rb') as f:
-                    votes = pickle.load(f)
+            if os.path.exists("data/{}/tallies.pickle".format(year)):
+                with open("data/{}/tallies.pickle".format(year), 'rb') as f:
+                    tallies = pickle.load(f)
             else:
-                votes = load_year(year)
-            vm.votes.extend(votes)
+                tallies = load_year(year)
+            vm.tallies.extend(tallies)
         calculate_betrayal(vm, args.only_necessary, args.only_current, args.limit)
 
 if __name__ == '__main__':
