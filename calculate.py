@@ -15,7 +15,7 @@ import sys
 import yaml
 
 LEGISLATORS_PICKLE = 'legislators.pickle'
-TALLIES_PICKLE = 'tallies.pickle'
+ROLL_CALLS_PICKLE = 'roll_calls.pickle'
 
 """ Current presidential candidates who were senators."""
 CANDIDATE_IDS = (
@@ -25,7 +25,7 @@ CANDIDATE_IDS = (
     'S350', # Marco Rubio
 )
 
-""" Words used in the 'result' section of a tally to indicate that the yeas won."""
+""" Words used in the 'result' section of a roll call to indicate that the yeas won."""
 SUCCESS_WORDS = (
     'Amendment Agreed to',
     'Amendment Germane',
@@ -51,7 +51,7 @@ SUCCESS_WORDS = (
     'Resolution of Ratification Agreed to',
     'Veto Overridden',
 )
-""" Words used in the 'result' section of a tally to indicate that the nays won. """
+""" Words used in the 'result' section of a roll call to indicate that the nays won. """
 FAIL_WORDS = (
     'Amendment Not Germane',
     'Amendment Rejected',
@@ -210,7 +210,7 @@ class UnknownResultError(ValueError):
     pass
 
 def successful(result):
-    """ Returns string indicating if yeas (Y) or nays (N) won a given tally. """
+    """ Returns string indicating if yeas (Y) or nays (N) won a given roll call. """
     if result in SUCCESS_WORDS:
         return 'Y'
     if result in FAIL_WORDS:
@@ -219,35 +219,31 @@ def successful(result):
         raise UnknownResultError('Result in other field. TODO: parse other field')
     raise ValueError('{} is not a documented result'.format(result))
 
-class TallyManager(object):
-    """ Class for holding an array of tallies. """
+class RollCallManager(object):
+    """ Class for holding an array of roll_calls. """
     def __init__(self):
-        self.tallies = []
+        self.roll_calls = []
 
-class Tally(object):
-    """ Class for retaining information about the results of a tally of votes in the Senate.
-
-    Note: "vote" has two meanings in the json and the documentation: the individual response
-    of a given senator as well as the tallying up of these votes. I refer to the latter as a
-    "tally" to reduce confusion within the code.
+class RollCall(object):
+    """ Class for retaining information about the results of a roll call of votes in the Senate.
 
     Attributes:
-    tally_id: the unique identifier of this tally
+    roll_call_id: the unique identifier of this roll call
     requires: the rule for the success of those in favor -- 1/2, 3/5, or 2/3
     votes: array containing all the votes by individual senators
-    resolution: the detailed description of the result of the tally
+    resolution: the detailed description of the result of the roll call
     success: 'Y' or 'N' -- indicatation by the resolution whether the yeas or nays won
     party_breakdown: dictionary of percentages of each party voting yea or nay, for
                      example, the keys would be Democrat-N, Democrat-Y, Republican-N, Republican-Y
-                     for a tally with senators in each category, and the total would add up to 2
+                     for a roll call with senators in each category, and the total would add up to 2
                      (100% for each party)
     """
 
-    def __init__(self, tally_data):
-        self.tally_id = tally_data['vote_id']
-        self.requires = tally_data['requires']
-        self.votes = self._load_votes(tally_data)
-        self.resolution = tally_data['result']
+    def __init__(self, roll_call_data):
+        self.roll_call_id = roll_call_data['vote_id']
+        self.requires = roll_call_data['requires']
+        self.votes = self._load_votes(roll_call_data)
+        self.resolution = roll_call_data['result']
         self.success = successful(self.resolution)
         self.party_breakdown = self._calculate_party_breakdown()
         self._set_betrayal_attributes_on_votes()
@@ -257,11 +253,11 @@ class Tally(object):
         on the side of success."""
         return self.party_breakdown['{}-{}'.format(party, self.success)] > .5
 
-    def _load_votes(self, tally_data):
+    def _load_votes(self, roll_call_data):
         """ Builds Vote objects to fill the votes array. Note, this only loads
         yeas and nays -- ignoring 'present' and 'not voting'."""
         return_data = []
-        votes = tally_data['votes']
+        votes = roll_call_data['votes']
         loaded = False
         if 'Nay' in votes:
             loaded = True
@@ -327,10 +323,10 @@ class Tally(object):
 
     @property
     def betrayal_necessary(self):
-        """ Whether the ultimate resolution of the tally could have been accomplished
+        """ Whether the ultimate resolution of the roll call could have been accomplished
         by a single party without the assistance of members of the other. For example,
-        consider a tally that requires 1/2 is a success. If the yeas of one party
-        on its own were greater than 50% of the tally, then no betrayal would have been
+        consider a roll call that requires 1/2 is a success. If the yeas of one party
+        on its own were greater than 50% of the roll call, then no betrayal would have been
         necesssary. However, if the yeas of neither party on its own surpassed the 50%
         mark, then betrayal was necessary."""
         betrayals = self.betrayal_cnt
@@ -347,7 +343,7 @@ class Tally(object):
 
 def necessary_yeas(nays, requires):
     """ Based on the number of nays and the requirement for success,
-    how many yeas would be necessary to carry the tally. Assumes ties
+    how many yeas would be necessary to carry the roll call. Assumes ties
     go to the nays for simplicity."""
     if requires == '1/2':
         return nays + 1
@@ -360,7 +356,7 @@ def necessary_yeas(nays, requires):
 
 def necessary_nays(yeas, requires):
     """ Based on the number of yeas and the requirement for success,
-    how many nays would be necessary to defeat the tally. Assumes ties
+    how many nays would be necessary to defeat the roll call. Assumes ties
     go to the nays for simplicity."""
     if requires == '1/2':
         return yeas
@@ -387,12 +383,13 @@ SORT_KEYS = {
     'fail': lambda x: x.futile_cnt,
     'pct': lambda x: x.success_pct,
 }
+
 def calculate_betrayal(vm, only_necessary = False, only_current = False, only_candidates = False, limit = 20, sort = 'pct'):
     sl = SenatorLookup()
     senators = set()
-    for tally in vm.tallies:
-        add_betrayal = not only_necessary or tally.betrayal_necessary
-        for vote in tally.votes:
+    for roll_call in vm.roll_calls:
+        add_betrayal = not only_necessary or roll_call.betrayal_necessary
+        for vote in roll_call.votes:
             senator = sl.senators[vote.senator_id]
             senators.add(senator)
             senator.vote_cnt += 1
@@ -426,8 +423,8 @@ def calculate_betrayal(vm, only_necessary = False, only_current = False, only_ca
 def resolution_hist(vm):
     """ Exploratory histogram """
     resolution_ctr = Counter()
-    for tally in vm.tallies:
-        resolution_ctr[tally.resolution] += 1
+    for roll_call in vm.roll_calls:
+        resolution_ctr[roll_call.resolution] += 1
     print 'Resolutions count ordered by most common descending'
     for resolution, resolution_count in resolution_ctr.most_common():
         print resolution, resolution_count
@@ -436,22 +433,29 @@ def betrayal_hist(vm):
     """ Exploratory histogram """
     print 'Hist of number of betraying votes'
     betrayal_ctr = Counter()
-    for tally in vm.tallies:
-        betrayals = len([vote for vote in tally.votes if vote.betrayed_party])
+    for roll_call in vm.roll_calls:
+        betrayals = len([vote for vote in roll_call.votes if vote.betrayed_party])
         betrayal_ctr[betrayals] += 1
         if betrayals > 30:
-            print tally.vote_id
+            print roll_call.vote_id
     for betrayal_quantity, betrayal_quantity_occurences in betrayal_ctr.most_common():
         print betrayal_quantity, betrayal_quantity_occurences
 
 def calculate_session(year):
     if int(year) < 1941:
+        # before 1941, the divisions were not based on year
         print 'Unable to calculate session for years before 1941'
         sys.exit(1)
     # Sessions start in 1789 and last two years
     return (int(year) + 1)/2 - 894
 
 def load_year(year):
+    """ Builds new pickled roll call data
+
+    First, it rsyncs the json data from govtrack.us to data/{year}/
+    Second, it builds the roll_calls
+    Third, it pickles them all in data/{}/roll_calls.pickle
+    """
     if int(year) < 1989:
         print 'This code does not work with data before 1989'
         sys.exit(1)
@@ -465,24 +469,24 @@ def load_year(year):
     else:
         print "Rsync not working for {year}. Please download all json in subdirectories of https://www.govtrack.us/data/congress/{session}/votes/{year}/s*".format(year=year, session=session)
 
-    tallies = []
+    roll_calls = []
     for root, dirs, files in os.walk("data/{}".format(year)):
         for filename in files:
             if filename.endswith('json'):
                 file_path = '{}/{}'.format(root, filename)
                 with open(file_path, 'rb') as f:
                     try:
-                        tallies.append(Tally(json.load(f)))
+                        roll_calls.append(RollCall(json.load(f)))
                     except:
                         print 'Error in {}'.format(file_path)
                         raise
 
-    if tallies:
-        with open("data/{}/{}".format(year, TALLIES_PICKLE), 'wb') as f:
-            pickle.dump(tallies, f)
-        return tallies
+    if roll_calls:
+        with open("data/{}/{}".format(year, ROLL_CALLS_PICKLE), 'wb') as f:
+            pickle.dump(roll_calls, f)
+        return roll_calls
     else:
-        print "Something wrong: no tallies for {}".format(year)
+        print "Something wrong: no roll_calls for {}".format(year)
         sys.exit(1)
 
 def year_iterator(args):
@@ -501,14 +505,14 @@ def run(args):
             print 'Loading:', year
             load_year(year)
     else:
-        vm = TallyManager()
+        vm = RollCallManager()
         for year in year_iterator(args):
-            if os.path.exists("data/{}/{}".format(year, TALLIES_PICKLE)):
-                with open("data/{}/{}".format(year, TALLIES_PICKLE), 'rb') as f:
-                    tallies = pickle.load(f)
+            if os.path.exists("data/{}/{}".format(year, ROLL_CALLS_PICKLE)):
+                with open("data/{}/{}".format(year, ROLL_CALLS_PICKLE), 'rb') as f:
+                    roll_calls = pickle.load(f)
             else:
-                tallies = load_year(year)
-            vm.tallies.extend(tallies)
+                roll_calls = load_year(year)
+            vm.roll_calls.extend(roll_calls)
         calculate_betrayal(vm, args.only_necessary, args.only_current, args.only_pc, args.limit, args.sort)
 
 if __name__ == '__main__':
