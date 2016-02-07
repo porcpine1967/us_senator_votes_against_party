@@ -14,7 +14,15 @@ import sys
 # requires pyaml
 import yaml
 
-""" Words used in the 'result' section of a tally to indicate that the yeas won. """
+""" Current presidential candidates who were senators."""
+CANDIDATE_IDS = (
+    'S278', # Hillary Clinton
+    'S355', # Ted Cruz
+    'S313', # Bernie Sanders
+    'S350', # Marco Rubio
+)
+
+""" Words used in the 'result' section of a tally to indicate that the yeas won."""
 SUCCESS_WORDS = (
     'Amendment Agreed to',
     'Amendment Germane',
@@ -77,6 +85,9 @@ def load_senators(do_rsync):
     First, it rsyncs the legislator data from govtrack.us to data/legislators
     Second, it builds senators
     Third, it pickles them all in data/legislators/senators.pickle
+
+    Parameters:
+    do_rsync: try to download legislator data via rsync
     """
     if not os.path.isdir('data/legislators'):
         os.makedirs('data/legislators')
@@ -134,8 +145,7 @@ def test_for_rsync():
     return bool(distutils.spawn.find_executable('rsync'))
 
 class SenatorLookup(object):
-    """ Class for loading senator information from a yaml file
-    for later lookup. """
+    """ Class for holding senator information."""
     def __init__(self):
         if not os.path.exists('data/legislators/legislators.pickle'):
             load_senators(False)
@@ -190,7 +200,7 @@ def successful(result):
     if result in FAIL_WORDS:
         return 'N'
     if result == 'unknown':
-        raise UnknownResultError()
+        raise UnknownResultError('Result in other field. TODO: parse other field')
     raise ValueError('{} is not a documented result'.format(result))
 
 class TallyManager(object):
@@ -199,18 +209,22 @@ class TallyManager(object):
         self.tallies = []
 
 class Tally(object):
-    """ Class for retaining information about the results of a call for votes (called "tally") in the Senate.
+    """ Class for retaining information about the results of a tally of votes in the Senate.
+
+    Note: "vote" has two meanings in the json and the documentation: the individual response
+    of a given senator as well as the tallying up of these votes. I refer to the latter as a
+    "tally" to reduce confusion within the code.
 
     Attributes:
     tally_id: the unique identifier of this tally
     requires: the rule for the success of those in favor -- 1/2, 3/5, or 2/3
     votes: array containing all the votes by individual senators
-    resolution: the string indicating the result of the tally
-    success: 'Y' or 'N' indicating by the resolution whether the yeas or nays won
+    resolution: the detailed description of the result of the tally
+    success: 'Y' or 'N' -- indicatation by the resolution whether the yeas or nays won
     party_breakdown: dictionary of percentages of each party voting yea or nay, for
-    example, the keys would be Democrat-N, Democrat-Y, Republican-N, Republican-Y for
-    a tally with senators in each category, and the total would add up to 2 (100% for each
-    party)
+                     example, the keys would be Democrat-N, Democrat-Y, Republican-N, Republican-Y
+                     for a tally with senators in each category, and the total would add up to 2
+                     (100% for each party)
     """
 
     def __init__(self, tally_data):
@@ -220,7 +234,7 @@ class Tally(object):
         self.resolution = tally_data['result']
         self.success = successful(self.resolution)
         self.party_breakdown = self._calculate_party_breakdown()
-        self._load_betrayed_party()
+        self._set_betrayal_attributes_on_votes()
 
     def party_won(self, party):
         """ Whether the majority of votes by senators in the given party were
@@ -272,7 +286,7 @@ class Tally(object):
             breakdown['{}-N'.format(party)] = party_no / party_total
         return breakdown
 
-    def _load_betrayed_party(self):
+    def _set_betrayal_attributes_on_votes(self):
         """ Sets the betrayed_party and futile_betrayal attributes of all
         Vote objects in the votes array. """
         for vote in self.votes:
@@ -315,7 +329,6 @@ class Tally(object):
             number_non_betrayals = self.nay_count - self.betrayal_cnt
             return number_nays_needed > number_non_betrayals
 
-
 def necessary_yeas(nays, requires):
     """ Based on the number of nays and the requirement for success,
     how many yeas would be necessary to carry the tally. Assumes ties
@@ -327,7 +340,7 @@ def necessary_yeas(nays, requires):
     elif requires == '3/5':
         return 3*nays/2 + 1
     else:
-        raise ValueError('Invalid requires: {}'.format(requires))
+        raise ValueError('Unknown success requirement: {}'.format(requires))
 
 def necessary_nays(yeas, requires):
     """ Based on the number of yeas and the requirement for success,
@@ -340,7 +353,7 @@ def necessary_nays(yeas, requires):
     elif requires == '3/5':
         return 2*yeas/3
     else:
-        raise ValueError('Invalid requires: {}'.format(requires))
+        raise ValueError('Unknown success requirement: {}'.format(requires))
 
 class Vote(object):
     """ Utility class for holding attributes of a given Senator's vote. """
@@ -351,29 +364,39 @@ class Vote(object):
         self.betrayed_party = None
         self.futile_betrayal = None
 
-def calculate_betrayal(vm, only_necessary = False, only_current = False, limit = 20):
+def calculate_betrayal(vm, only_necessary = False, only_current = False, only_candidates = False, limit = 20):
     betrayal_ctr = Counter()
     futility_ctr = Counter()
+    vote_ctr = Counter()
     for tally in vm.tallies:
         add_betrayal = not only_necessary or tally.betrayal_necessary
         for vote in tally.votes:
+            vote_ctr[vote.senator_id] += 1
             if vote.betrayed_party and add_betrayal:
                 betrayal_ctr[vote.senator_id] += 1
-            if vote.futile_betrayal:
+            if vote.futile_betrayal and add_betrayal:
                 futility_ctr[vote.senator_id] += 1
+    if only_necessary:
+        print 'Only considering occasions in which neither party had enough votes to win'
+    if only_current:
+        print 'Only showing current senators'
     print 'Number of votes opposed to own party that subverted party desire, by senator'
-    print 'Betray  Success Pct  Senator'
+    print '   All   Total  Successful  Success Pct  Senator'
     sl = SenatorLookup()
 
     print_cnt = 0
     for senator_id, betrayal_count in betrayal_ctr.most_common():
+        if only_candidates and senator_id not in CANDIDATE_IDS:
+            continue
         if senator_id in sl.senators:
             senator = sl.senators[senator_id]
             if only_current and not senator.current:
                 continue
             print_cnt += 1
-            success_pct = float(betrayal_count)/(betrayal_count + futility_ctr[senator_id])
-            print '{:>7} {:>12.2f} {}'.format(betrayal_count, success_pct, str(senator))
+            all_votes = vote_ctr[senator_id]
+            total = betrayal_count + futility_ctr[senator_id]
+            success_pct = float(betrayal_count)/total
+            print '{:>6} {:>6} {:>9} {:>12.2f}     {}'.format(all_votes, total, betrayal_count, success_pct, str(senator))
         if limit > 0 and print_cnt >= limit:
             break
 
@@ -402,12 +425,13 @@ def calculate_session(year):
     if int(year) < 1941:
         print 'Unable to calculate session for years before 1941'
         sys.exit(1)
-    if int(year) < 1991:
-        print 'WARNING: years before 1991 have not been tested'
     # Sessions start in 1789 and last two years
     return (int(year) + 1)/2 - 894
 
 def load_year(year):
+    if int(year) < 1989:
+        print 'This code does not work with data before 1989'
+        sys.exit(1)
     session = calculate_session(year)
     if test_for_rsync():
         if not os.path.isdir('data'):
@@ -438,30 +462,39 @@ def load_year(year):
         print "Something wrong: no tallies for {}".format(year)
         sys.exit(1)
 
+def year_iterator(args):
+    if '-' in args.years:
+        start, end = args.years.split('-')
+        return xrange(int(start), int(end) + 1)
+    else:
+        return args.years.split(',')
+    
+
 def run(args):
     if args.action == 'load-senators':
         load_senators(True)
     elif args.action == 'load-years':
-        for year in args.years.split(','):
+        for year in year_iterator(args):
             print 'Loading:', year
             load_year(year)
     else:
         vm = TallyManager()
-        for year in args.years.split(','):
+        for year in year_iterator(args):
             if os.path.exists("data/{}/tallies.pickle".format(year)):
                 with open("data/{}/tallies.pickle".format(year), 'rb') as f:
                     tallies = pickle.load(f)
             else:
                 tallies = load_year(year)
             vm.tallies.extend(tallies)
-        calculate_betrayal(vm, args.only_necessary, args.only_current, args.limit)
+        calculate_betrayal(vm, args.only_necessary, args.only_current, args.only_pc, args.limit)
 
 if __name__ == '__main__':
-    parser = ArgumentParser(description='Write out data about senator\'s betrayals')
-    parser.add_argument('years', type=str, help='csv of years to parse')
+    parser = ArgumentParser(description='Write out data about senators\' votes in opposition to the majority of their parties')
+    parser.add_argument('years', type=str, help='csv (e.g. "1991,1992,1993" with no space) or simple range (e.g. "1991-2015") of years to parse')
     parser.add_argument('--action', type=str, default='calculate', help='Action to take: calculate, load-senators, load-year')
-    parser.add_argument('--only-current', action='store_true', help='limit to current senators')
+    parser.add_argument('--only-current', action='store_true', help='only show current senators')
     parser.add_argument('--only-necessary', action='store_true', help='limit betrayals to necessary ones')
     parser.add_argument('--limit', type=int, default=20, help='Number of senators to give data for')
+    parser.add_argument('--only-pc', action='store_true', help='only show presidential candidates')
     args = parser.parse_args()
     run(args)
