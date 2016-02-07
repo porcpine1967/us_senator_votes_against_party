@@ -14,6 +14,9 @@ import sys
 # requires pyaml
 import yaml
 
+LEGISLATORS_PICKLE = 'legislators.pickle'
+TALLIES_PICKLE = 'tallies.pickle'
+
 """ Current presidential candidates who were senators."""
 CANDIDATE_IDS = (
     'S278', # Hillary Clinton
@@ -138,7 +141,7 @@ def load_senators(do_rsync):
     if not success:
         sys.exit(1)
 
-    with open('data/legislators/legislators.pickle', 'wb') as f:
+    with open("data/legislators/{}".format(LEGISLATORS_PICKLE), 'wb') as f:
         pickle.dump(senators, f)
 
 def test_for_rsync():
@@ -147,9 +150,9 @@ def test_for_rsync():
 class SenatorLookup(object):
     """ Class for holding senator information."""
     def __init__(self):
-        if not os.path.exists('data/legislators/legislators.pickle'):
+        if not os.path.exists("data/legislators/{}".format(LEGISLATORS_PICKLE)):
             load_senators(False)
-        with open('data/legislators/legislators.pickle', 'rb') as f:
+        with open("data/legislators/{}".format(LEGISLATORS_PICKLE), 'rb') as f:
             self.senators = pickle.load(f)
     def get_senator_info(self, lis):
         if lis in self.senators:
@@ -475,7 +478,7 @@ def load_year(year):
                         raise
 
     if tallies:
-        with open("data/{}/tallies.pickle".format(year), 'wb') as f:
+        with open("data/{}/{}".format(year, TALLIES_PICKLE), 'wb') as f:
             pickle.dump(tallies, f)
         return tallies
     else:
@@ -500,8 +503,8 @@ def run(args):
     else:
         vm = TallyManager()
         for year in year_iterator(args):
-            if os.path.exists("data/{}/tallies.pickle".format(year)):
-                with open("data/{}/tallies.pickle".format(year), 'rb') as f:
+            if os.path.exists("data/{}/{}".format(year, TALLIES_PICKLE)):
+                with open("data/{}/{}".format(year, TALLIES_PICKLE), 'rb') as f:
                     tallies = pickle.load(f)
             else:
                 tallies = load_year(year)
