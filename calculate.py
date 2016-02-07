@@ -14,8 +14,9 @@ import sys
 # requires pyaml
 import yaml
 
-LEGISLATORS_PICKLE = 'legislators.pickle'
-TALLIES_PICKLE = 'tallies.pickle'
+LEGISLATORS_PICKLE = 'legislators.sanders-as-dem.pickle'
+TALLIES_PICKLE = 'tallies.sanders-as-dem.pickle'
+SANDERS_LIS = 'S313'
 
 """ Current presidential candidates who were senators."""
 CANDIDATE_IDS = (
@@ -191,9 +192,12 @@ class Senator(object):
 
     def _parties_from_data(self, data):
         parties = set()
-        term_data = data['terms']
-        for term in term_data:
-            parties.add(term['party'])
+        if self.lis == SANDERS_LIS:
+            parties.add('Democrat')
+        else:
+            term_data = data['terms']
+            for term in term_data:
+                parties.add(term['party'])
         return parties
 
     def _states_from_data(self, data):
@@ -375,7 +379,10 @@ class Vote(object):
     """ Utility class for holding attributes of a given Senator's vote. """
     def __init__(self, senator_id, party, vote_answer):
         self.senator_id = senator_id
-        self.party = party
+        if senator_id == SANDERS_LIS:
+            self.party = 'Democrat'
+        else:
+            self.party = party
         self.vote_answer = vote_answer
         self.betrayed_party = None
         self.futile_betrayal = None
@@ -451,18 +458,18 @@ def calculate_session(year):
     # Sessions start in 1789 and last two years
     return (int(year) + 1)/2 - 894
 
-def load_year(year):
+def load_year(year, do_rsync):
     if int(year) < 1989:
         print 'This code does not work with data before 1989'
         sys.exit(1)
     session = calculate_session(year)
-    if test_for_rsync():
+    if do_rsync and test_for_rsync():
         if not os.path.isdir('data'):
             os.makedirs('data')
         with open('/dev/null', 'wb') as f:
             if subprocess.call(['rsync', '-avz', '--delete', '--delete-excluded', '--exclude', '**/text-versions/', '--exclude', '*.xml', 'govtrack.us::govtrackdata/congress/{}/votes/{}/s*'.format(session, year), 'data/{}'.format(year)], stdout=f, stderr=f):
                 print "Rsync not working for {year}. Please download all json in subdirectories of https://www.govtrack.us/data/congress/{session}/votes/{year}/s*".format(year=year, session=session)
-    else:
+    elif do_rsync:
         print "Rsync not working for {year}. Please download all json in subdirectories of https://www.govtrack.us/data/congress/{session}/votes/{year}/s*".format(year=year, session=session)
 
     tallies = []
@@ -491,7 +498,6 @@ def year_iterator(args):
         return xrange(int(start), int(end) + 1)
     else:
         return args.years.split(',')
-    
 
 def run(args):
     if args.action == 'load-senators':
@@ -499,7 +505,7 @@ def run(args):
     elif args.action == 'load-years':
         for year in year_iterator(args):
             print 'Loading:', year
-            load_year(year)
+            load_year(year, True)
     else:
         vm = TallyManager()
         for year in year_iterator(args):
@@ -507,7 +513,7 @@ def run(args):
                 with open("data/{}/{}".format(year, TALLIES_PICKLE), 'rb') as f:
                     tallies = pickle.load(f)
             else:
-                tallies = load_year(year)
+                tallies = load_year(year, False)
             vm.tallies.extend(tallies)
         calculate_betrayal(vm, args.only_necessary, args.only_current, args.only_pc, args.limit, args.sort)
 
