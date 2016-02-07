@@ -14,7 +14,7 @@ import sys
 # requires pyaml
 import yaml
 
-""" Words used in the 'result' section of a tally to indicate that the ayes won. """
+""" Words used in the 'result' section of a tally to indicate that the yeas won. """
 SUCCESS_WORDS = (
     'Amendment Agreed to',
     'Amendment Germane',
@@ -129,6 +129,7 @@ def load_senators(do_rsync):
 
     with open('data/legislators/legislators.pickle', 'wb') as f:
         pickle.dump(senators, f)
+
 def test_for_rsync():
     return bool(distutils.spawn.find_executable('rsync'))
 
@@ -183,7 +184,7 @@ class UnknownResultError(ValueError):
     pass
 
 def successful(result):
-    """ Returns string indicating if ayes (Y) or nays (N) won a given tally. """
+    """ Returns string indicating if yeas (Y) or nays (N) won a given tally. """
     if result in SUCCESS_WORDS:
         return 'Y'
     if result in FAIL_WORDS:
@@ -203,16 +204,15 @@ class Tally(object):
     Attributes:
     tally_id: the unique identifier of this tally
     requires: the rule for the success of those in favor -- 1/2, 3/5, or 2/3
-    votes: array containing all the votes of individual senators
+    votes: array containing all the votes by individual senators
     resolution: the string indicating the result of the tally
-    success: 'Y' or 'N' indicating by the resolution whether the ayes or nays won
-    party_breakdown: dictionary of percentages of each party voting aye or nay, for
+    success: 'Y' or 'N' indicating by the resolution whether the yeas or nays won
+    party_breakdown: dictionary of percentages of each party voting yea or nay, for
     example, the keys would be Democrat-N, Democrat-Y, Republican-N, Republican-Y for
     a tally with senators in each category, and the total would add up to 2 (100% for each
     party)
-
-
     """
+
     def __init__(self, tally_data):
         self.tally_id = tally_data['vote_id']
         self.requires = tally_data['requires']
@@ -223,13 +223,13 @@ class Tally(object):
         self._load_betrayed_party()
 
     def party_won(self, party):
-        """ Whether the majority of votes by the party indicated by the parameter was
-        on the side of success. """
+        """ Whether the majority of votes by senators in the given party were
+        on the side of success."""
         return self.party_breakdown['{}-{}'.format(party, self.success)] > .5
 
     def _load_votes(self, tally_data):
         """ Builds Vote objects to fill the votes array. Note, this only loads
-        ayes and nays -- ignoring 'present' and 'not voting'."""
+        yeas and nays -- ignoring 'present' and 'not voting'."""
         return_data = []
         votes = tally_data['votes']
         loaded = False
@@ -251,10 +251,13 @@ class Tally(object):
             for vote_data in votes['Guilty']:
                 return_data.append(Vote(vote_data['id'], vote_data['party'], 'Y'))
         if not loaded:
-            raise ValueError('Nothing to count')
+            raise ValueError('Nothing useful to count')
         return return_data
 
     def _calculate_party_breakdown(self):
+        """ Generates a dictionary with party_name-vote keys and the percentage
+        of the senators in the party who voted yea or nay (ignoring senators
+        who did not vote yea or nay for calculating percentage)."""
         breakdown_count = Counter()
         parties = set()
         for vote in self.votes:
@@ -296,10 +299,10 @@ class Tally(object):
     def betrayal_necessary(self):
         """ Whether the ultimate resolution of the tally could have been accomplished
         by a single party without the assistance of members of the other. For example,
-        in a 1/2 requires status and the tally was a success, if the ayes of one party
+        consider a tally that requires 1/2 is a success. If the yeas of one party
         on its own were greater than 50% of the tally, then no betrayal would have been
-        necesssary. However, if the ayes of neither party on its own surpassed the 50%
-        mark, then betrayal was necessary. """
+        necesssary. However, if the yeas of neither party on its own surpassed the 50%
+        mark, then betrayal was necessary."""
         betrayals = self.betrayal_cnt
         if betrayals == 0:
             return False
@@ -326,7 +329,7 @@ def necessary_yeas(nays, requires):
         raise ValueError('Invalid requires: {}'.format(requires))
 
 def necessary_nays(yeas, requires):
-    """ Based on the number of ayes and the requirement for success,
+    """ Based on the number of yeas and the requirement for success,
     how many nays would be necessary to defeat the tally. Assumes ties
     go to the nays for simplicity. """
     if requires == '1/2':
@@ -392,7 +395,7 @@ def betrayal_hist(vm):
         if betrayals > 30:
             print tally.vote_id
     for betrayal_quantity, betrayal_quantity_occurences in betrayal_ctr.most_common():
-        prin betrayal_quantity, betrayal_quantity_occurences
+        print betrayal_quantity, betrayal_quantity_occurences
 
 def calculate_session(year):
     if int(year) < 1941:
@@ -400,7 +403,7 @@ def calculate_session(year):
         sys.exit(1)
     if int(year) < 1991:
         print 'WARNING: years before 1991 have not been tested'
-    # Sessions start in 1789 and go last two years
+    # Sessions start in 1789 and last two years
     return (int(year) + 1)/2 - 894
 
 def load_year(year):
