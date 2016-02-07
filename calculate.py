@@ -58,7 +58,9 @@ FAIL_WORDS = (
     'Motion to Proceed Rejected',
     'Motion to Recommit Rejected',
     'Motion to Refer Rejected',
+    'Motion to Reconsider Rejected',
     'Motion to Table Failed',
+    'Motion to Table Motion to Reconsider Rejected',
     'Nomination Rejected',
     'Not Guilty',
     'Objection Not Sustained',
@@ -177,12 +179,17 @@ class Senator(object):
     def __str__(self):
         return '{} {} - {}'.format(self.name, ','.join(self.parties), ','.join(self.states))
 
+class UnknownResultError(ValueError):
+    pass
+
 def successful(result):
     """ Returns string indicating if ayes (Y) or nays (N) won a given vote result. """
     if result in SUCCESS_WORDS:
         return 'Y'
     if result in FAIL_WORDS:
         return 'N'
+    if result == 'unknown':
+        raise UnknownResultError()
     raise ValueError('{} is not a documented result'.format(result))
 
 class VoteManager(object):
@@ -237,10 +244,12 @@ class Vote(object):
             for vr_data in v['Not Guilty']:
                 return_data.append(VoteResponse(vr_data['id'], vr_data['party'], 'N'))
         if 'Yea' in v:
+            loaded = True
             for vr_data in v['Yea']:
                 if "VP" != vr_data:
                     return_data.append(VoteResponse(vr_data['id'], vr_data['party'], 'Y'))
         if 'Guilty' in v:
+            loaded = True
             for vr_data in v['Guilty']:
                 return_data.append(VoteResponse(vr_data['id'], vr_data['party'], 'Y'))
         if not loaded:
@@ -366,29 +375,6 @@ def calculate_betrayal(vm, only_necessary = False, only_current = False, limit =
         if limit > 0 and print_cnt >= limit:
             break
 
-def calculate_betrayal_pct(vm):
-    senators = defaultdict(lambda:Counter())
-    all_with_party = 0
-    all_betray = 0
-    for vote in vm.votes:
-        for vr in vote.votes:
-            senators[vr.senator_id][vr.betrayed_party] += 1
-            if vr.betrayed_party:
-                all_betray += 1
-            else:
-                all_with_party += 1
-    sen_pcts = []
-    for senator, ctr in senators.items():
-        with_party = ctr[False]
-        betray = ctr[True]
-        total = with_party + betray
-        sen_pcts.append((senator, float(betray) / total, total,))
-    print 'Percent of votes opposed to own party that subverted party desire, by senator'
-    for senator, pct, total in sorted(sen_pcts, key=lambda x: x[1]):
-        print '{} {:.2f} {}'.format(senator, pct, total)
-    print 'TOTAL: {}'.format(float(all_betray + all_with_party) / len(senators))
-    print 'AVG: {:.2f}'.format(float(all_betray) / (all_betray + all_with_party))
-
 def resolution_hist(vm):
     """ Exploratory histogram """
     resolution_ctr = Counter()
@@ -410,48 +396,12 @@ def betrayal_hist(vm):
     for k, v in betrayal_ctr.most_common():
         print k, v
 
-def win_with_betrayal(vm):
-    """ Exploratory histogram """
-    print 'Hist of percentage of betrayals necessary for win'
-    pct_necessary_betrayal_ctr = Counter()
-    no_betrayal_ctr = 0
-    for vote in vm.votes:
-        betrayals = vote.betrayal_cnt
-        if betrayals == 0:
-            no_betrayal_ctr += 1
-            continue
-        if vote.success == 'Y':
-            n_yeas = necessary_yeas(vote.nay_count, vote.requires)
-            pct_n = (n_yeas - vote.yea_count + betrayals)/float(betrayals)
-        else:
-            nnays = necessary_nays(vote.yea_count, vote.requires)
-            pct_n = (nnays - vote.nay_count + betrayals)/float(betrayals)
-        if pct_n <= 0:
-            key = '0.0'
-        else:# pct_n > 1:
-            key = '1.0'
-        # else:
-        #     key = '{:.1f}'.format(pct_n)
-        pct_necessary_betrayal_ctr[key] += 1
-    print 'nob', no_betrayal_ctr
-    for k in sorted(pct_necessary_betrayal_ctr.keys()):
-        print k, pct_necessary_betrayal_ctr[k]
-
-def conscience(vm):
-    """ A negative vote when both parties are in favor.
-
-    Does not consider opposition by Independent as negating."""
-    for vote in vm.votes:
-        if vote.success != 'Y':
-            continue
-        favor_cnt = 0
-        for k, v in vote.party_breakdown.items():
-            pass
-
 def calculate_session(year):
     if int(year) < 1941:
         print 'Unable to calculate session for years before 1941'
         sys.exit(1)
+    if int(year) < 1991:
+        print 'WARNING: years before 1991 have not been tested'
     # Sessions start in 1789 and go last two years
     return (int(year) + 1)/2 - 894
 
@@ -462,9 +412,9 @@ def load_year(year):
             os.makedirs('data')
         with open('/dev/null', 'wb') as f:
             if subprocess.call(['rsync', '-avz', '--delete', '--delete-excluded', '--exclude', '**/text-versions/', '--exclude', '*.xml', 'govtrack.us::govtrackdata/congress/{}/votes/{}/s*'.format(session, year), 'data/{}'.format(year)], stdout=f, stderr=f):
-                print "Rsync not working for {year}. Please download all json in subdirectories of https://www.govtrack.us/data/congress/{sessions}/votes/{year}/s*".format(year=year, session=session)
+                print "Rsync not working for {year}. Please download all json in subdirectories of https://www.govtrack.us/data/congress/{session}/votes/{year}/s*".format(year=year, session=session)
     else:
-        print "Rsync not working for {year}. Please download all json in subdirectories of https://www.govtrack.us/data/congress/{sessions}/votes/{year}/s*".format(year=year, session=session)
+        print "Rsync not working for {year}. Please download all json in subdirectories of https://www.govtrack.us/data/congress/{session}/votes/{year}/s*".format(year=year, session=session)
 
     votes = []
     for root, dirs, files in os.walk("data/{}".format(year)):
@@ -472,7 +422,11 @@ def load_year(year):
             if filename.endswith('json'):
                 file_path = '{}/{}'.format(root, filename)
                 with open(file_path, 'rb') as f:
-                    votes.append(Vote(json.load(f)))
+                    try:
+                        votes.append(Vote(json.load(f)))
+                    except:
+                        print 'Error in {}'.format(file_path)
+                        raise
 
     if votes:
         with open("data/{}/votes.pickle".format(year), 'wb') as f:
