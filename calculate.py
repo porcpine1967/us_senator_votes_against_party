@@ -304,15 +304,16 @@ class Tally(object):
         necesssary. However, if the yeas of neither party on its own surpassed the 50%
         mark, then betrayal was necessary."""
         betrayals = self.betrayal_cnt
-        if betrayals == 0:
+        if self.betrayal_cnt == 0:
             return False
         if self.success == 'Y':
-            n_yeas = necessary_yeas(self.nay_count, self.requires)
-            pct_n = (n_yeas - self.yea_count + betrayals)/float(betrayals)
+            number_yeas_needed = necessary_yeas(self.nay_count, self.requires)
+            number_non_betrayals = self.yea_count - self.betrayal_cnt
+            return number_yeas_needed > number_non_betrayals
         else:
-            n_nays = necessary_nays(self.yea_count, self.requires)
-            pct_n = (n_nays - self.nay_count + betrayals)/float(betrayals)
-        return pct_n > 0
+            number_nays_needed = necessary_nays(self.yea_count, self.requires)
+            number_non_betrayals = self.nay_count - self.betrayal_cnt
+            return number_nays_needed > number_non_betrayals
 
 
 def necessary_yeas(nays, requires):
@@ -331,7 +332,7 @@ def necessary_yeas(nays, requires):
 def necessary_nays(yeas, requires):
     """ Based on the number of yeas and the requirement for success,
     how many nays would be necessary to defeat the tally. Assumes ties
-    go to the nays for simplicity. """
+    go to the nays for simplicity."""
     if requires == '1/2':
         return yeas
     elif requires == '2/3':
