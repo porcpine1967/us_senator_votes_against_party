@@ -165,6 +165,19 @@ class Senator(object):
         self.parties = self._parties_from_data(data)
         self.states = self._states_from_data(data)
         self.current = current
+        self.vote_cnt = 0
+        self.betrayal_cnt = 0
+        self.futile_cnt = 0
+
+    @property
+    def success_pct(self):
+        try:
+            return self.betrayal_cnt / float(self.total_betrayal_cnt)
+        except ZeroDivisionError:
+            return 0.0
+    @property
+    def total_betrayal_cnt(self):
+        return self.betrayal_cnt + self.futile_cnt
 
     def _name_from_data(self, data):
         name_data = data['name']
@@ -365,38 +378,38 @@ class Vote(object):
         self.futile_betrayal = None
 
 def calculate_betrayal(vm, only_necessary = False, only_current = False, only_candidates = False, limit = 20):
-    betrayal_ctr = Counter()
-    futility_ctr = Counter()
-    vote_ctr = Counter()
+    sl = SenatorLookup()
+    senators = set()
     for tally in vm.tallies:
         add_betrayal = not only_necessary or tally.betrayal_necessary
         for vote in tally.votes:
-            vote_ctr[vote.senator_id] += 1
+            senator = sl.senators[vote.senator_id]
+            senators.add(senator)
+            senator.vote_cnt += 1
             if vote.betrayed_party and add_betrayal:
-                betrayal_ctr[vote.senator_id] += 1
+                senator.betrayal_cnt += 1
             if vote.futile_betrayal and add_betrayal:
-                futility_ctr[vote.senator_id] += 1
+                senator.futile_cnt += 1
     if only_necessary:
         print 'Only considering occasions in which neither party had enough votes to win'
     if only_current:
         print 'Only showing current senators'
     print 'Number of votes opposed to own party that subverted party desire, by senator'
     print '   All   Total  Successful  Success Pct  Senator'
-    sl = SenatorLookup()
 
     print_cnt = 0
-    for senator_id, betrayal_count in betrayal_ctr.most_common():
-        if only_candidates and senator_id not in CANDIDATE_IDS:
+
+    for senator in sorted(senators, reverse=True, key=lambda x: x.success_pct):
+        if only_candidates and senator.lis not in CANDIDATE_IDS:
             continue
-        if senator_id in sl.senators:
-            senator = sl.senators[senator_id]
-            if only_current and not senator.current:
-                continue
-            print_cnt += 1
-            all_votes = vote_ctr[senator_id]
-            total = betrayal_count + futility_ctr[senator_id]
-            success_pct = float(betrayal_count)/total
-            print '{:>6} {:>6} {:>9} {:>12.2f}     {}'.format(all_votes, total, betrayal_count, success_pct, str(senator))
+        if only_current and not senator.current:
+            continue
+        print_cnt += 1
+        all_votes = senator.vote_cnt
+        total = senator.total_betrayal_cnt
+        betrayal_count = senator.betrayal_cnt
+        success_pct = senator.success_pct
+        print '{:>6} {:>6} {:>9} {:>12.2f}     {}'.format(all_votes, total, betrayal_count, success_pct, str(senator))
         if limit > 0 and print_cnt >= limit:
             break
 
