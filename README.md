@@ -1,4 +1,4 @@
----
+        ---
 title: "Calculations of Senators Voting against Majority of Party"
 author: "Jeffrey Dettmann"
 date: "February 7, 2016"
@@ -7,16 +7,16 @@ date: "February 7, 2016"
 The code available in this repository calculates the number of times each United States Senator voted against the majority of his or her party and the impact of these votes.
 
 ## Notes:
-1. This code was developed against python 2.7.6 and requires the external pyaml module.
-2. This code uses rsync to fetch data from www.govtrack.us. This code should work after manually downloading the appropriate files, but this process has not been tested.
-3. This code uses the word 'betrayal' to indicate a vote by a Senator against the majority of his or her own party that led to the failure of the majority of the party to imprint its will on the result. It is not meant pejoratively, but is rather used because it is a lot shorter than any other way of describing the event.
+1. This code was developed against python 2.7.6 and requires the external pyyaml module. `sudo pip install pyyaml`
+2. This code automatically downloads data from www.senate.gov.
+3. This code uses the word 'betrayal' to indicate a vote by a Senator against the majority of his or her own party that led to the failure of the majority of the party to imprint its will on the result. It is not meant pejoratively, but is rather used because it is much shorter than any other way of describing the event.
 
 ## Instructions
 1. Clone this repository into a directory we will henceforth refer to as "the working directory".
 2. Load senator data: `python calculate.py na --action load-senators`
 3. Run the code in the working directory from the command line: `python calcluate.py 1989-2015`
 
-Note: when running the first time, the code rsyncs yearly data, builds the domain objects, and pickles them in the appropriate directory. After the first run, the code should run much faster.
+Note: when running the first time, the code downloads yearly data, builds the domain objects, and pickles them in the appropriate directory. After the first run, the code should run much faster.
 
 ### Input
 * First position (years)

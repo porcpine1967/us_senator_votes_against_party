@@ -10,19 +10,27 @@ except:
    import pickle
 import subprocess
 import sys
+from time import sleep
+import urllib2
+from xml.dom.minidom import parse
 
-# requires pyaml
+# requires pyyaml
 import yaml
 
 LEGISLATORS_PICKLE = 'legislators.pickle'
 ROLL_CALLS_PICKLE = 'roll_calls.pickle'
+VERDICTS = { 'Yea': 'Y', 'Nay': 'N', 'Guilty': 'Y', 'Not Guilty': 'N' }
 
 """ Current presidential candidates who were senators."""
 CANDIDATE_IDS = (
-    'S278', # Hillary Clinton
-    'S355', # Ted Cruz
     'S313', # Bernie Sanders
-    'S350', # Marco Rubio
+    'S370', # Cory A. Booker
+    'S331', # Kirsten E. Gillibrand
+    'S387', # Kamala D. Harris
+    'S311', # Amy Klobuchar
+    'S366', # Elizabeth Warren
+    'S330', # Michael F. Bennet
+    'S010', # Joseph Biden
 )
 
 """ Words used in the 'result' section of a roll call to indicate that the yeas won."""
@@ -40,6 +48,7 @@ SUCCESS_WORDS = (
     'Motion Agreed to',
     'Motion for Attendance Agreed to',
     'Motion to Adjourn Agreed to',
+    'Motion to Discharge Agreed to',
     'Motion to Proceed Agreed to',
     'Motion to Reconsider Agreed to',
     'Motion to Table Agreed to',
@@ -47,6 +56,7 @@ SUCCESS_WORDS = (
     'Motion to Table Motion to Reconsider Agreed to',
     'Nomination Confirmed',
     'Point of Order Sustained',
+    'Point of Order Well Taken',
     'Resolution Agreed to',
     'Resolution of Ratification Agreed to',
     'Veto Overridden',
@@ -82,36 +92,35 @@ FAIL_WORDS = (
     'Veto Sustained',
 )
 
-def load_senators(do_rsync):
+def load_senators(download):
     """ Builds new pickled senator data
 
-    First, it rsyncs the legislator data from govtrack.us to data/legislators
+    First, it downloads the data from github
     Second, it builds senators
     Third, it pickles them all in data/legislators/senators.pickle
 
     Parameters:
-    do_rsync: try to download legislator data via rsync
+    download: try to download legislator data
     """
     if not os.path.isdir('data/legislators'):
         os.makedirs('data/legislators')
-    if do_rsync and test_for_rsync():
-        with open('/dev/null', 'wb') as f:
-            if subprocess.call(['rsync', '-avz', '--delete', '--delete-excluded', '--exclude', '**/text-versions/', '--exclude', '*.xml', 'govtrack.us::govtrackdata/congress-legislators/legislators-current.yaml', 'data/legislators/legislators-current.yaml'], stdout=f, stderr=f):
-                print """Rsync not working. Please download these two files and place them in data/legislators:
-                         https://www.govtrack.us/data/congress-legislators/legislators-current.yaml
-                         https://www.govtrack.us/data/congress-legislators/legislators-historical.yaml"""
-            elif subprocess.call(['rsync', '-avz', '--delete', '--delete-excluded', '--exclude', '**/text-versions/', '--exclude', '*.xml', 'govtrack.us::govtrackdata/congress-legislators/legislators-historical.yaml', 'data/legislators/legislators-historical.yaml'], stdout=f, stderr=f):
-                print """Rsync not working for historical legislators. Please download this file and place it in data/legislators:
-                         https://www.govtrack.us/data/congress-legislators/legislators-historical.yaml"""
-    elif do_rsync:
-        print """No rsync, please download these two files and place them in data/legislators:
-                 https://www.govtrack.us/data/congress-legislators/legislators-current.yaml
-                 https://www.govtrack.us/data/congress-legislators/legislators-historical.yaml"""
+
+    if download:
+        current_path = 'data/legislators/legislators-current.yaml'
+        with open(current_path, 'wb') as f:
+            for l in urllib2.urlopen('https://raw.githubusercontent.com/unitedstates/congress-legislators/master/legislators-current.yaml'):
+                f.write(l)
+
+        historical_path = 'data/legislators/legislators-historical.yaml'
+        with open(historical_path, 'wb') as f:
+            for l in urllib2.urlopen('https://github.com/unitedstates/congress-legislators/blob/master/legislators-historical.yaml?raw=true'):
+                f.write(l)
+
     success = True
     senators = {}
-    if os.path.exists('data/legislators/legislators-current.yaml'):
+    if os.path.exists(current_path):
         with open('data/legislators/legislators-current.yaml', 'rb') as f:
-            senator_list = yaml.load(f)
+            senator_list = yaml.safe_load(f)
             for data in senator_list:
                 try:
                     s = Senator(data, True)
@@ -122,9 +131,9 @@ def load_senators(do_rsync):
         print 'No file at data/legislators/legislators-current.yaml. Please download from https://www.govtrack.us/data/congress-legislators/legislators-current.yaml'
         success = False
 
-    if os.path.exists('data/legislators/legislators-historical.yaml'):
+    if os.path.exists(historical_path):
         with open('data/legislators/legislators-historical.yaml', 'rb') as f:
-            senator_list = yaml.load(f)
+            senator_list = yaml.safe_load(f)
             for data in senator_list:
                 try:
                     s = Senator(data, False)
@@ -143,9 +152,6 @@ def load_senators(do_rsync):
 
     with open("data/legislators/{}".format(LEGISLATORS_PICKLE), 'wb') as f:
         pickle.dump(senators, f)
-
-def test_for_rsync():
-    return bool(distutils.spawn.find_executable('rsync'))
 
 class SenatorLookup(object):
     """ Class for holding senator information."""
@@ -173,6 +179,13 @@ class Senator(object):
         self.futile_cnt = 0
 
     @property
+    def total_betrayal_pct(self):
+        try:
+            return self.total_betrayal_cnt / float(self.vote_cnt)
+        except ZeroDivisionError:
+            return 0.0
+
+    @property
     def success_pct(self):
         try:
             return self.betrayal_cnt / float(self.total_betrayal_cnt)
@@ -187,7 +200,7 @@ class Senator(object):
         if 'official_full' in name_data:
             return name_data['official_full']
         else:
-            return '{} {}'.format(name_data['first'], name_data['last'])
+            return u'{} {}'.format(name_data['first'], name_data['last'])
 
     def _parties_from_data(self, data):
         parties = set()
@@ -224,6 +237,13 @@ class RollCallManager(object):
     def __init__(self):
         self.roll_calls = []
 
+def solo_node_value(doc, node_name):
+    for node in doc.getElementsByTagName(node_name):
+        return(text_value(node))
+def text_value(node):
+    for c in node.childNodes:
+        return c.toxml()
+
 class RollCall(object):
     """ Class for retaining information about the results of a roll call of votes in the Senate.
 
@@ -240,10 +260,12 @@ class RollCall(object):
     """
 
     def __init__(self, roll_call_data):
-        self.roll_call_id = roll_call_data['vote_id']
-        self.requires = roll_call_data['requires']
+        self.roll_call_id = '{}{}{}'.format(solo_node_value(roll_call_data, 'congress'),
+                                    solo_node_value(roll_call_data, 'session'),
+                                    solo_node_value(roll_call_data, 'vote_number'))
+        self.requires = solo_node_value(roll_call_data, 'majority_requirement')
         self.votes = self._load_votes(roll_call_data)
-        self.resolution = roll_call_data['result']
+        self.resolution = solo_node_value(roll_call_data, 'vote_result')
         self.success = successful(self.resolution)
         self.party_breakdown = self._calculate_party_breakdown()
         self._set_betrayal_attributes_on_votes()
@@ -257,25 +279,15 @@ class RollCall(object):
         """ Builds Vote objects to fill the votes array. Note, this only loads
         yeas and nays -- ignoring 'present' and 'not voting'."""
         return_data = []
-        votes = roll_call_data['votes']
         loaded = False
-        if 'Nay' in votes:
-            loaded = True
-            for vote_data in votes['Nay']:
-                return_data.append(Vote(vote_data['id'], vote_data['party'], 'N'))
-        if 'Not Guilty' in votes:
-            loaded = True
-            for vote_data in votes['Not Guilty']:
-                return_data.append(Vote(vote_data['id'], vote_data['party'], 'N'))
-        if 'Yea' in votes:
-            loaded = True
-            for vote_data in votes['Yea']:
-                if "VP" != vote_data:
-                    return_data.append(Vote(vote_data['id'], vote_data['party'], 'Y'))
-        if 'Guilty' in votes:
-            loaded = True
-            for vote_data in votes['Guilty']:
-                return_data.append(Vote(vote_data['id'], vote_data['party'], 'Y'))
+        for member in roll_call_data.getElementsByTagName('member'):
+            vote = solo_node_value(member, 'vote_cast')
+            if vote in VERDICTS.keys():
+                loaded = True
+                return_data.append(Vote(solo_node_value(member, 'lis_member_id'),
+                                        solo_node_value(member, 'party'),
+                                        VERDICTS[vote]))
+
         if not loaded:
             raise ValueError('Nothing useful to count')
         return return_data
@@ -379,6 +391,7 @@ class Vote(object):
 SORT_KEYS = {
     'all': lambda x: x.vote_cnt,
     'total': lambda x: x.total_betrayal_cnt,
+    'tot_pct': lambda x: x.total_betrayal_pct,
     'success': lambda x: x.betrayal_cnt,
     'fail': lambda x: x.futile_cnt,
     'pct': lambda x: x.success_pct,
@@ -403,7 +416,7 @@ def calculate_betrayal(vm, only_necessary = False, only_current = False, only_ca
     if only_current:
         print 'Only showing current senators'
     print 'Number of votes opposed to own party that subverted party desire, by senator'
-    print '   All   Total  Successful  Success Pct  Senator'
+    print '   All   Total  Pct Tot   Successful  Success Pct  Senator'
 
     print_cnt = 0
 
@@ -417,7 +430,7 @@ def calculate_betrayal(vm, only_necessary = False, only_current = False, only_ca
         betrayal_count = senator.betrayal_cnt
         success_pct = senator.success_pct
         print_cnt += 1
-        print '{:>6} {:>6} {:>9} {:>12.2f}     {}'.format(all_votes, total, betrayal_count, success_pct, str(senator))
+        print '{:>6} {:>6} {:>8.2f} {:>10} {:>12.2f}     {}'.format(all_votes, total, senator.total_betrayal_pct, betrayal_count, success_pct, str(senator))
         if limit > 0 and print_cnt >= limit:
             break
 
@@ -448,7 +461,7 @@ def calculate_session(year):
         print 'Unable to calculate session for years before 1941'
         sys.exit(1)
     # Sessions start in 1789 and last two years
-    return (int(year) + 1)/2 - 894
+    return (int(year) + 1)/2 - 894, (int(year) % 2) and 1 or 2
 
 def load_year(year):
     """ Builds new pickled roll call data
@@ -460,30 +473,54 @@ def load_year(year):
     if int(year) < 1989:
         print 'This code does not work with data before 1989'
         sys.exit(1)
-    session = calculate_session(year)
-    if test_for_rsync():
-        if not os.path.isdir('data'):
-            os.makedirs('data')
-        with open('/dev/null', 'wb') as f:
-            if subprocess.call(['rsync', '-avz', '--delete', '--delete-excluded', '--exclude', '**/text-versions/', '--exclude', '*.xml', 'govtrack.us::govtrackdata/congress/{}/votes/{}/s*'.format(session, year), 'data/{}'.format(year)], stdout=f, stderr=f):
-                print "Rsync not working for {year}. Please download all json in subdirectories of https://www.govtrack.us/data/congress/{session}/votes/{year}/s*".format(year=year, session=session)
-    else:
-        print "Rsync not working for {year}. Please download all json in subdirectories of https://www.govtrack.us/data/congress/{session}/votes/{year}/s*".format(year=year, session=session)
 
+    session, subsession = calculate_session(year)
+    try:
+        os.makedirs('data/rollcalls/{}'.format(year))
+    except OSError:
+        pass
+    opener = urllib2.build_opener()
+    opener.addheaders = [('User-Agent', 'Mozilla/5.0')]
+    menu_path = 'data/rollcalls/{}/menu.xml'.format(year)
+    if not os.path.exists(menu_path):
+        print 'downloading', year
+        url = 'https://www.senate.gov/legislative/LIS/roll_call_lists/vote_menu_{}_{}.xml'.format(session, subsession)
+        with open(menu_path, 'wb') as f:
+            for l in opener.open(url):
+                f.write(l)
+    menu = parse(menu_path)
+    for cnt, vote_number_node in enumerate(menu.getElementsByTagName('vote_number')):
+        vote_number = text_value(vote_number_node)
+        vote_number_path = 'data/rollcalls/{}/{}.xml'.format(year, vote_number)
+        try:
+            exists = os.stat(vote_number_path).st_size
+        except OSError:
+            exists = False
+        if not exists:
+            if not cnt % 3:
+                sleep(2)
+            url = 'https://www.senate.gov/legislative/LIS/roll_call_votes/vote{session}{subsession}/vote_{session}_{subsession}_{vote_number}.xml'.format(session=session, subsession=subsession, vote_number=vote_number)
+            print 'downloading', url
+            with open(vote_number_path, 'wb') as f:
+                for l in opener.open(url):
+                    f.write(l)
+        
     roll_calls = []
-    for root, dirs, files in os.walk("data/{}".format(year)):
+    for root, dirs, files in os.walk("data/rollcalls/{}".format(year)):
         for filename in files:
-            if filename.endswith('json'):
+            if filename == 'menu.xml':
+                continue
+            if filename.endswith('xml'):
                 file_path = '{}/{}'.format(root, filename)
                 with open(file_path, 'rb') as f:
                     try:
-                        roll_calls.append(RollCall(json.load(f)))
+                        roll_calls.append(RollCall(parse(f)))
                     except:
                         print 'Error in {}'.format(file_path)
                         raise
 
     if roll_calls:
-        with open("data/{}/{}".format(year, ROLL_CALLS_PICKLE), 'wb') as f:
+        with open("data/rollcalls/{}/{}".format(year, ROLL_CALLS_PICKLE), 'wb') as f:
             pickle.dump(roll_calls, f)
         return roll_calls
     else:
@@ -508,8 +545,8 @@ def run(args):
     else:
         vm = RollCallManager()
         for year in year_iterator(args):
-            if os.path.exists("data/{}/{}".format(year, ROLL_CALLS_PICKLE)):
-                with open("data/{}/{}".format(year, ROLL_CALLS_PICKLE), 'rb') as f:
+            if os.path.exists("data/rollcalls/{}/{}".format(year, ROLL_CALLS_PICKLE)):
+                with open("data/rollcalls/{}/{}".format(year, ROLL_CALLS_PICKLE), 'rb') as f:
                     roll_calls = pickle.load(f)
             else:
                 roll_calls = load_year(year)
